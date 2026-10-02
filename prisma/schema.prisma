@@ -1,0 +1,32 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id               Int      @id @default(autoincrement())
+  telegramId       BigInt   @unique
+  isAdmin          Boolean  @default(false)
+  allowed          Boolean  @default(false)
+  phone            String?
+  encryptedSession String?  @db.Text
+  state            String   @default("IDLE")
+  stateData        String?  @db.Text
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  logs ActionLog[]
+}
+
+model ActionLog {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  action    String
+  detail    String?
+  createdAt DateTime @default(now())
+}
