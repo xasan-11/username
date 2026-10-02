@@ -51,6 +51,7 @@ export async function handleAdminUserListButton(ctx: MyContext): Promise<void> {
 
 export async function handleDeleteUserCallback(ctx: MyContext, data: string): Promise<void> {
   const user = ctx.dbUser;
+  await ctx.answerCallbackQuery().catch(() => undefined);
   if (!user.isAdmin) return;
 
   const idStr = data.split(":")[1];

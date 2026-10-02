@@ -28,6 +28,25 @@ export function describeLoginError(error: unknown): string {
   return `❌ Xatolik yuz berdi: ${code || "noma'lum xato"}`;
 }
 
+const RECOVERABLE_LOGIN_CODES = [
+  "PHONE_CODE_INVALID",
+  "PHONE_CODE_EMPTY",
+  "PHONE_CODE_EXPIRED",
+  "PASSWORD_HASH_INVALID",
+];
+
+/**
+ * true bo'lsa — foydalanuvchi shu bosqichda qoladi va qaytadan urinishi mumkin
+ * (masalan noto'g'ri kod/parol, yoki FLOOD_WAIT). false bo'lsa — bu tarmoq/DC
+ * darajasidagi jiddiy xato, login butunlay qaytadan (telefon bosqichidan)
+ * boshlanishi kerak.
+ */
+export function isRecoverableLoginError(error: unknown): boolean {
+  if (getFloodWaitSeconds(error) !== null) return true;
+  const code = errorCode(error);
+  return RECOVERABLE_LOGIN_CODES.some((c) => code.includes(c));
+}
+
 /**
  * Username tekshirish / yaratish / o'zgartirish bosqichidagi xatolarni
  * o'zbek tilida tushuntiradi.

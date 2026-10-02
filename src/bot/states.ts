@@ -13,6 +13,13 @@ export enum BotState {
 
 export type UsernameMode = "channel" | "group" | "self";
 
+export interface LoginStateData {
+  phone: string;
+  codeType: string; // "app" | "sms" | "call" | "flash_call" | "missed_call" | "other"
+  createdAt: number; // epoch ms — 5 daqiqalik muddatni hisoblash uchun
+  lastSentAt: number; // epoch ms — "qayta yuborish" tugmasi uchun 60s throttle
+}
+
 export interface UsernamesStateData {
   mode: UsernameMode;
 }

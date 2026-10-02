@@ -115,6 +115,7 @@ export async function handleMenuCallbackQuery(ctx: MyContext): Promise<void> {
   const user = ctx.dbUser;
   const data = ctx.callbackQuery?.data;
   if (!data) return;
+  await ctx.answerCallbackQuery().catch(() => undefined);
 
   if (user.state !== BotState.AWAITING_CONFIRM) return;
   const confirmData = getStateData<ConfirmStateData>(user);

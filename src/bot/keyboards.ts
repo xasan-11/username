@@ -27,6 +27,10 @@ export function mainMenuKeyboard(isAdmin: boolean) {
   return kb.resized();
 }
 
+export function resendCodeKeyboard() {
+  return new InlineKeyboard().text("📩 Kodni SMS bilan yuborish", "resend_code");
+}
+
 export function confirmCancelInlineKeyboard() {
   return new InlineKeyboard().text("✅ Tasdiqlash", "confirm").text("❌ Bekor qilish", "cancel");
 }
