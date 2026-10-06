@@ -13,6 +13,8 @@ import {
 import { checkFragmentNames, FragmentResult } from "../../userbot/fragment";
 import { logger } from "../../utils/logger";
 import type { TelegramClient } from "telegram";
+import { addChannelsToFolder, ChannelRef } from "../../userbot/folder";
+import { env } from "../../utils/env";
 import { describeUsernameActionError } from "../../userbot/errors";
 import { sleep } from "../../userbot/floodWait";
 import {
@@ -274,6 +276,7 @@ Eski username o'zgarmadi.`);
     const total = names.length;
     const lines: string[] = [];
     const orphans: string[] = [];
+    const created: { lineIdx: number; ref: ChannelRef }[] = [];
     const chatId = ctx.chat!.id;
     const progress = await ctx.editMessageText(`⏳ Yaratilmoqda... 0/${total}`).catch(() => undefined);
     const progressId = progress && typeof progress === "object" ? progress.message_id : undefined;
@@ -286,6 +289,7 @@ Eski username o'zgarmadi.`);
       } else {
         const outcome = await createChannelOrGroup(client, username, confirmData.mode);
         if (outcome.ok) {
+          created.push({ lineIdx: lines.length, ref: outcome.ref });
           lines.push(`✅ ${outcome.link}`);
         } else {
           lines.push(`❌ @${username}: ${describeUsernameActionError(outcome.error)}`);
@@ -301,6 +305,16 @@ Eski username o'zgarmadi.`);
           .catch(() => undefined);
       }
       if (i < total - 1) await sleep(2000 + Math.floor(Math.random() * 1000));
+    }
+
+    // Yaratilgan kanallarni papkaga BITTA yangilash bilan qo'shamiz (xato kanalga ta'sir qilmaydi)
+    if (created.length > 0) {
+      const folder = await addChannelsToFolder(client, created.map((c) => c.ref));
+      for (const c of created) {
+        lines[c.lineIdx] += folder.ok
+          ? ` — 📁 ${env.FOLDER_NAME} papkasiga qo'shildi`
+          : ` — Kanal ochildi, lekin '${env.FOLDER_NAME}' papkasiga qo'shib bo'lmadi: ${folder.reason}`;
+      }
     }
 
     let report = lines.join("\n");

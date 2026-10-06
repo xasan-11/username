@@ -80,7 +80,7 @@ export async function checkUsernamesAvailability(
   return results;
 }
 
-export type CreateOutcome = { ok: true; link: string } | { ok: false; error: unknown; orphan?: string };
+export type CreateOutcome = { ok: true; link: string; ref: { channelId: Api.InputPeerChannel["channelId"]; accessHash: Api.InputPeerChannel["accessHash"] } } | { ok: false; error: unknown; orphan?: string };
 
 /**
  * Yangi kanal yoki guruh yaratadi va unga username o'rnatadi. UpdateUsername xato
@@ -115,7 +115,7 @@ export async function createChannelOrGroup(
 
   try {
     await client.invoke(new Api.channels.UpdateUsername({ channel, username }));
-    return { ok: true, link: `https://t.me/${username}` };
+    return { ok: true, link: `https://t.me/${username}`, ref: { channelId: chat.id, accessHash: chat.accessHash } };
   } catch (e) {
     try {
       await client.invoke(new Api.channels.DeleteChannel({ channel }));

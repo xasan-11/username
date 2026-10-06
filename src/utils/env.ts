@@ -41,4 +41,5 @@ export const env = {
   DATABASE_URL: required("DATABASE_URL"),
   SESSION_ENCRYPTION_KEY: sessionKeyRaw,
   PORT: Number(process.env.PORT ?? 3000),
+  FOLDER_NAME: (process.env.FOLDER_NAME ?? "").trim() || "Username",
 };
