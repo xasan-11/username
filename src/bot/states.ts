@@ -26,6 +26,7 @@ export interface UsernamesStateData {
 
 export interface ConfirmStateData {
   mode: UsernameMode;
-  freeUsernames: string[];
+  freeUsernames: string[]; // ✅ ikkalasida ham bo'sh
+  retryUsernames: string[]; // ❔ "Qayta tekshirish" tugmasi uchun
   selected?: string; // faqat "self" rejimi uchun
 }

@@ -1,19 +1,59 @@
 import { TelegramClient, Api } from "telegram";
 import { sleep, getFloodWaitSeconds } from "./floodWait";
+import { logger } from "../utils/logger";
+
+export type TelegramStatus = "free" | "purchase" | "occupied" | "invalid" | "unknown";
 
 export interface UsernameCheckResult {
   username: string;
-  free: boolean;
-  invalid: boolean;
+  status: TelegramStatus;
 }
 
 export type FloodNotifier = (seconds: number) => Promise<void> | void;
 
+function codeOf(e: unknown): string {
+  const anyErr = e as { errorMessage?: string; message?: string } | null;
+  return String(anyErr?.errorMessage ?? anyErr?.message ?? "");
+}
+
 /**
- * Har bir username'ni Telegram'da bo'sh yoki bandligini tekshiradi.
- * contacts.ResolveUsername orqali: agar hech kimga/kanalga tegishli bo'lmasa
- * USERNAME_NOT_OCCUPIED xatosi qaytadi — bu bo'shligini bildiradi.
- * Tekshiruvlar orasida kichik kechikish qo'yiladi, FLOOD_WAIT chiqsa kutib davom etiladi.
+ * Bitta username'ni Telegram'da tekshiradi. "free" FAQAT Telegram aniq bo'sh desa:
+ * ResolveUsername => USERNAME_NOT_OCCUPIED, so'ng account.CheckUsername => true.
+ * Noma'lum xato yoki FLOOD_WAIT hech qachon "free" bo'lmaydi.
+ */
+export async function checkTelegramUsername(
+  client: TelegramClient,
+  username: string
+): Promise<{ status: TelegramStatus; floodSeconds?: number }> {
+  try {
+    await client.invoke(new Api.contacts.ResolveUsername({ username }));
+    return { status: "occupied" };
+  } catch (e) {
+    const flood = getFloodWaitSeconds(e);
+    if (flood !== null) return { status: "unknown", floodSeconds: flood };
+    const code = codeOf(e);
+    if (code.includes("USERNAME_INVALID")) return { status: "invalid" };
+    if (!code.includes("USERNAME_NOT_OCCUPIED")) return { status: "unknown" };
+  }
+
+  // Resolve "mavjud emas" dedi — Fragment'da sotuvda bo'lishi mumkin, shuni aniqlaymiz
+  try {
+    const ok = await client.invoke(new Api.account.CheckUsername({ username }));
+    return { status: ok ? "free" : "occupied" };
+  } catch (e) {
+    const flood = getFloodWaitSeconds(e);
+    if (flood !== null) return { status: "unknown", floodSeconds: flood };
+    const code = codeOf(e);
+    if (code.includes("USERNAME_PURCHASE_AVAILABLE")) return { status: "purchase" };
+    if (code.includes("USERNAME_OCCUPIED")) return { status: "occupied" };
+    if (code.includes("USERNAME_INVALID")) return { status: "invalid" };
+    return { status: "unknown" };
+  }
+}
+
+/**
+ * Username'larni Telegram'da ketma-ket tekshiradi (1-bosqich). FLOOD_WAIT chiqsa
+ * kutilmaydi: shu va qolgan nomlar "unknown" (❔) bo'ladi.
  */
 export async function checkUsernamesAvailability(
   client: TelegramClient,
@@ -21,76 +61,70 @@ export async function checkUsernamesAvailability(
   onFlood?: FloodNotifier
 ): Promise<UsernameCheckResult[]> {
   const results: UsernameCheckResult[] = [];
+  let flooded = false;
 
   for (const username of usernames) {
-    let done = false;
-    while (!done) {
-      try {
-        await client.invoke(new Api.contacts.ResolveUsername({ username }));
-        results.push({ username, free: false, invalid: false });
-        done = true;
-      } catch (e) {
-        const anyErr = e as { errorMessage?: string; message?: string };
-        const code = anyErr?.errorMessage ?? anyErr?.message ?? "";
-        if (code.includes("USERNAME_NOT_OCCUPIED")) {
-          results.push({ username, free: true, invalid: false });
-          done = true;
-        } else if (code.includes("USERNAME_INVALID")) {
-          results.push({ username, free: false, invalid: true });
-          done = true;
-        } else {
-          const waitSeconds = getFloodWaitSeconds(e);
-          if (waitSeconds !== null) {
-            if (onFlood) await onFlood(waitSeconds);
-            await sleep((waitSeconds + 1) * 1000);
-            // shu username uchun qayta urinamiz (while davom etadi)
-          } else {
-            // noma'lum xato — band/yaroqsiz deb belgilab, keyingisiga o'tamiz
-            results.push({ username, free: false, invalid: true });
-            done = true;
-          }
-        }
-      }
+    if (flooded) {
+      results.push({ username, status: "unknown" });
+      continue;
     }
+    const r = await checkTelegramUsername(client, username);
+    if (r.floodSeconds !== undefined) {
+      flooded = true;
+      if (onFlood) await Promise.resolve(onFlood(r.floodSeconds)).catch(() => undefined);
+    }
+    results.push({ username, status: r.status });
     await sleep(800);
   }
 
   return results;
 }
 
+export type CreateOutcome = { ok: true; link: string } | { ok: false; error: unknown; orphan?: string };
+
 /**
- * Yangi kanal yoki guruh yaratadi va unga berilgan username'ni o'rnatadi.
- * t.me havolasini qaytaradi.
+ * Yangi kanal yoki guruh yaratadi va unga username o'rnatadi. UpdateUsername xato
+ * bersa, yaratilgan kanal darhol o'chiriladi. O'chirish ham xato bersa `orphan`
+ * to'ldiriladi (bo'sh kanal qolib ketgan).
  */
 export async function createChannelOrGroup(
   client: TelegramClient,
   username: string,
   mode: "channel" | "group"
-): Promise<string> {
-  const createResult = await client.invoke(
-    new Api.channels.CreateChannel({
-      title: username,
-      about: "",
-      broadcast: mode === "channel",
-      megagroup: mode === "group",
-    })
-  );
-
-  // channels.CreateChannel natijasi Updates turlaridan biri bo'lib, .chats maydonini o'z ichiga oladi
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const chats = (createResult as any).chats as Api.Channel[] | undefined;
-  const chat = chats?.[0];
-  if (!chat) {
-    throw new Error("Kanal/guruh yaratilmadi (Telegram bo'sh natija qaytardi)");
+): Promise<CreateOutcome> {
+  let createResult: Api.TypeUpdates;
+  try {
+    createResult = await client.invoke(
+      new Api.channels.CreateChannel({
+        title: username,
+        about: "",
+        broadcast: mode === "channel",
+        megagroup: mode === "group",
+      })
+    );
+  } catch (e) {
+    return { ok: false, error: e };
   }
 
-  const channel = new Api.InputChannel({ channelId: chat.id, accessHash: chat.accessHash! });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const chat = ((createResult as any).chats as Api.Channel[] | undefined)?.[0];
+  if (!chat || chat.accessHash === undefined) {
+    return { ok: false, error: new Error("Telegram bo'sh natija qaytardi") };
+  }
+  const channel = new Api.InputChannel({ channelId: chat.id, accessHash: chat.accessHash });
 
-  // Shu kanal konteksida ham bandlikni oldindan tekshiramiz (spec talabi)
-  await client.invoke(new Api.channels.CheckUsername({ channel, username })).catch(() => undefined);
-
-  await client.invoke(new Api.channels.UpdateUsername({ channel, username }));
-  return `https://t.me/${username}`;
+  try {
+    await client.invoke(new Api.channels.UpdateUsername({ channel, username }));
+    return { ok: true, link: `https://t.me/${username}` };
+  } catch (e) {
+    try {
+      await client.invoke(new Api.channels.DeleteChannel({ channel }));
+      return { ok: false, error: e };
+    } catch (delErr) {
+      logger.error("Yaratilgan kanalni o'chirib bo'lmadi", { username, error: codeOf(delErr) });
+      return { ok: false, error: e, orphan: username };
+    }
+  }
 }
 
 /**
