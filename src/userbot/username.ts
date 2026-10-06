@@ -1,6 +1,7 @@
 import { TelegramClient, Api } from "telegram";
 import { sleep, getFloodWaitSeconds } from "./floodWait";
 import { logger } from "../utils/logger";
+import { startPending, savePendingChannel, finishPending, deleteChannelWithRetry, recordOrphan } from "./cleanup";
 
 export type TelegramStatus = "free" | "purchase" | "occupied" | "invalid" | "unknown";
 
@@ -80,18 +81,28 @@ export async function checkUsernamesAvailability(
   return results;
 }
 
-export type CreateOutcome = { ok: true; link: string; ref: { channelId: Api.InputPeerChannel["channelId"]; accessHash: Api.InputPeerChannel["accessHash"] } } | { ok: false; error: unknown; orphan?: string };
+export type CreateOutcome =
+  | {
+      ok: true;
+      link: string;
+      ref: { channelId: Api.InputPeerChannel["channelId"]; accessHash: Api.InputPeerChannel["accessHash"] };
+    }
+  | { ok: false; error: unknown; deleted: boolean; created: boolean };
 
 /**
- * Yangi kanal yoki guruh yaratadi va unga username o'rnatadi. UpdateUsername xato
- * bersa, yaratilgan kanal darhol o'chiriladi. O'chirish ham xato bersa `orphan`
- * to'ldiriladi (bo'sh kanal qolib ketgan).
+ * Yangi kanal yoki guruh yaratadi va username o'rnatadi. Username o'rnatish bosqichida
+ * HAR QANDAY xato bo'lsa (muvaffaqiyat bayrog'i o'rnatilmasa), yaratilgan kanal o'chiriladi.
+ * O'chirib bo'lmasa — "tozalanmagan kanallar" jadvaliga yoziladi. Bot yiqilsa, PendingChannel
+ * yozuvi orqali tozalovchi uni keyin o'chiradi.
  */
 export async function createChannelOrGroup(
   client: TelegramClient,
+  userId: number,
   username: string,
   mode: "channel" | "group"
 ): Promise<CreateOutcome> {
+  const pendingId = await startPending(userId, username);
+
   let createResult: Api.TypeUpdates;
   try {
     createResult = await client.invoke(
@@ -103,28 +114,42 @@ export async function createChannelOrGroup(
       })
     );
   } catch (e) {
-    return { ok: false, error: e };
+    await finishPending(pendingId);
+    return { ok: false, error: e, deleted: true, created: false };
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const chat = ((createResult as any).chats as Api.Channel[] | undefined)?.[0];
   if (!chat || chat.accessHash === undefined) {
-    return { ok: false, error: new Error("Telegram bo'sh natija qaytardi") };
+    return { ok: false, error: new Error("Telegram bo'sh natija qaytardi"), deleted: false, created: true };
   }
-  const channel = new Api.InputChannel({ channelId: chat.id, accessHash: chat.accessHash });
+  const { id: channelId, accessHash } = chat;
+  await savePendingChannel(pendingId, channelId, accessHash);
 
+  let usernameSet = false;
+  let failure: unknown;
   try {
-    await client.invoke(new Api.channels.UpdateUsername({ channel, username }));
-    return { ok: true, link: `https://t.me/${username}`, ref: { channelId: chat.id, accessHash: chat.accessHash } };
+    await client.invoke(
+      new Api.channels.UpdateUsername({ channel: new Api.InputChannel({ channelId, accessHash }), username })
+    );
+    usernameSet = true;
   } catch (e) {
-    try {
-      await client.invoke(new Api.channels.DeleteChannel({ channel }));
-      return { ok: false, error: e };
-    } catch (delErr) {
-      logger.error("Yaratilgan kanalni o'chirib bo'lmadi", { username, error: codeOf(delErr) });
-      return { ok: false, error: e, orphan: username };
-    }
+    failure = e;
   }
+  if (usernameSet) {
+    await finishPending(pendingId);
+    return { ok: true, link: `https://t.me/${username}`, ref: { channelId, accessHash } };
+  }
+
+  const del = await deleteChannelWithRetry(client, channelId, accessHash);
+  if (del.ok) {
+    await finishPending(pendingId);
+    return { ok: false, error: failure, deleted: true, created: true };
+  }
+  logger.error("Yaratilgan kanalni o'chirib bo'lmadi", { username, error: del.reason });
+  await recordOrphan(userId, channelId, accessHash, del.reason);
+  await finishPending(pendingId);
+  return { ok: false, error: failure, deleted: false, created: true };
 }
 
 /**

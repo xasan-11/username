@@ -287,16 +287,18 @@ Eski username o'zgarmadi.`);
       if (stillFree !== true) {
         lines.push(`⚠️ @${username}: o'tkazib yuborildi — ${stillFree}`);
       } else {
-        const outcome = await createChannelOrGroup(client, username, confirmData.mode);
+        const outcome = await createChannelOrGroup(client, user.id, username, confirmData.mode);
         if (outcome.ok) {
           created.push({ lineIdx: lines.length, ref: outcome.ref });
           lines.push(`✅ ${outcome.link}`);
         } else {
-          lines.push(`❌ @${username}: ${describeUsernameActionError(outcome.error)}`);
-          if (outcome.orphan) {
-            orphans.push(outcome.orphan);
-            logger.error("Bo'sh kanal qolib ketdi", { userId: user.telegramId.toString(), username: outcome.orphan });
-          }
+          const tail = !outcome.created
+            ? ""
+            : outcome.deleted
+              ? " Yaratilgan kanal o'chirildi."
+              : " Yaratilgan kanal o'chirib bo'lmadi, keyinroq avtomatik tozalanadi.";
+          lines.push(`⚠️ @${username}: ${describeUsernameActionError(outcome.error)}${tail}`);
+          if (outcome.created && !outcome.deleted) orphans.push(username);
         }
       }
       if (progressId !== undefined) {
@@ -321,7 +323,7 @@ Eski username o'zgarmadi.`);
     if (orphans.length > 0) {
       report += `
 
-⚠️ Bo'sh kanal qolib ketdi: ${orphans.map((n) => `@${n}`).join(", ")} — qo'lda o'chiring.`;
+Bo'sh kanal qolib ketdi (${orphans.map((n) => `@${n}`).join(", ")}), avtomatik tozalanadi.`;
     }
     await ctx.reply(report);
     await ctx.reply("Menyu:", { reply_markup: mainMenuKeyboard(user.isAdmin) });

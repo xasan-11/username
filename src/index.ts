@@ -6,6 +6,7 @@ import { createBot } from "./bot";
 import { disconnectAll } from "./userbot/manager";
 import { startHealthServer } from "./server";
 import { logger } from "./utils/logger";
+import { startCleanupSweeper } from "./userbot/cleanup";
 
 const INITIAL_RETRY_DELAY_MS = 5000;
 const MAX_RETRY_DELAY_MS = 60000;
@@ -90,6 +91,8 @@ async function main(): Promise<void> {
   logger.info("Bazaga ulanildi");
 
   startHealthServer();
+
+  startCleanupSweeper();
 
   bot = createBot();
   await runBotForever(bot);

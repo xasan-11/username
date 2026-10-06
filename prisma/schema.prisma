@@ -21,6 +21,8 @@ model User {
   updatedAt        DateTime @updatedAt
 
   logs ActionLog[]
+  pendingChannels PendingChannel[]
+  orphanChannels  OrphanChannel[]
 }
 
 model ActionLog {
@@ -30,4 +32,32 @@ model ActionLog {
   action    String
   detail    String?
   createdAt DateTime @default(now())
+}
+
+// Bot yaratayotgan kanallar: CreateChannel'dan OLDIN yoziladi, username o'rnatilgach o'chiriladi.
+// Bot yiqilsa, tozalovchi eskirgan yozuvlardagi bo'sh kanallarni o'chiradi.
+model PendingChannel {
+  id         Int      @id @default(autoincrement())
+  userId     Int
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  username   String
+  status     String   @default("pending") // pending | done
+  channelId  BigInt?
+  accessHash BigInt?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([status, createdAt])
+}
+
+// O'chirib bo'lmagan kanallar — tozalovchi qayta urinadi.
+model OrphanChannel {
+  id         Int      @id @default(autoincrement())
+  userId     Int
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channelId  BigInt
+  accessHash BigInt
+  reason     String
+  attempts   Int      @default(0)
+  createdAt  DateTime @default(now())
 }
